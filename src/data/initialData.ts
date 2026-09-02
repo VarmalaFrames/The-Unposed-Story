@@ -102,6 +102,12 @@ export const DEFAULT_SETTINGS: SiteSettings = {
   firebaseSyncEnabled: false,
   firebaseLastSyncedAt: Date.now(),
 
+  // Supabase Free Tier Cloud Storage Defaults (1 GB Free Forever)
+  supabaseUrl: '',
+  supabaseAnonKey: '',
+  supabaseBucket: 'photos',
+  supabaseAutoUpload: true,
+
   // Watermark & Intellectual Property Protection Defaults
   watermarkEnabled: true,
   watermarkType: 'both',

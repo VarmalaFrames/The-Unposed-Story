@@ -14,6 +14,7 @@ import { InquiryManager } from './InquiryManager';
 import { CrudManager } from './CrudManager';
 import { SettingsManager } from './SettingsManager';
 import { DriveManager } from './DriveManager';
+import { SupabaseManager } from './SupabaseManager';
 import {
   Camera,
   Palette,
@@ -24,6 +25,7 @@ import {
   Inbox,
   Settings,
   HardDrive,
+  Cloud,
   ExternalLink,
   LogOut,
 } from 'lucide-react';
@@ -66,21 +68,28 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   onLogout,
 }) => {
   const [activeTab, setActiveTab] = useState<
-    'photos' | 'theme' | 'films' | 'packages' | 'testimonials' | 'faqs' | 'inquiries' | 'settings' | 'drive'
+    'photos' | 'theme' | 'films' | 'packages' | 'testimonials' | 'faqs' | 'inquiries' | 'settings' | 'drive' | 'supabase'
   >('photos');
 
   const unreadInquiriesCount = inquiries.filter((i) => !i.read).length;
+  const isSupabaseConfigured = Boolean(
+    settings.supabaseUrl &&
+    settings.supabaseAnonKey &&
+    settings.supabaseUrl.startsWith('https://')
+  );
 
   interface NavTabItem {
-    id: 'photos' | 'theme' | 'films' | 'packages' | 'testimonials' | 'faqs' | 'inquiries' | 'settings' | 'drive';
+    id: 'photos' | 'theme' | 'films' | 'packages' | 'testimonials' | 'faqs' | 'inquiries' | 'settings' | 'drive' | 'supabase';
     label: string;
     icon: React.ComponentType<{ className?: string }>;
     count?: number;
     highlight?: boolean;
+    badge?: string;
   }
 
   const navTabs: NavTabItem[] = [
     { id: 'photos', label: 'Photos', icon: Camera, count: photos.length },
+    { id: 'supabase', label: 'Supabase Storage', icon: Cloud, badge: isSupabaseConfigured ? 'Active' : 'Free' },
     { id: 'inquiries', label: 'Inquiries', icon: Inbox, count: unreadInquiriesCount, highlight: unreadInquiriesCount > 0 },
     { id: 'films', label: 'Films', icon: Film, count: films.length },
     { id: 'packages', label: 'Packages', icon: Package, count: packages.length },
@@ -156,6 +165,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     {tab.count}
                   </span>
                 )}
+                {tab.badge && (
+                  <span className={`px-1.5 py-0.5 rounded text-[9px] font-extrabold tracking-wider uppercase ${
+                    tab.badge === 'Active'
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-amber-100 text-amber-800'
+                  }`}>
+                    {tab.badge}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -170,6 +188,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             settings={settings}
             onPhotosUpdated={onPhotosUpdated}
             onSettingsUpdated={onSettingsUpdated}
+          />
+        )}
+
+        {activeTab === 'supabase' && (
+          <SupabaseManager
+            settings={settings}
+            photos={photos}
+            onSettingsUpdated={onSettingsUpdated}
+            onPhotosUpdated={onPhotosUpdated}
           />
         )}
 

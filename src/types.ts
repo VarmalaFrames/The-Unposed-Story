@@ -17,7 +17,7 @@ export interface ScrollerAvatar {
 
 export interface PhotoItem {
   id: string;
-  image: string; // URL, Base64 data, or Firebase Storage URL
+  image: string; // URL, Base64 data, Firebase URL, or Supabase CDN URL
   caption?: string;
   moment?: string;
   coupleName?: string;
@@ -25,7 +25,8 @@ export interface PhotoItem {
   featured?: boolean;
   createdAt: number;
   cloudSynced?: boolean;
-  storageType?: 'firestore' | 'drive' | 'url' | 'local';
+  storageType?: 'firestore' | 'drive' | 'url' | 'local' | 'supabase';
+  supabasePath?: string;
 }
 
 export interface PackageItem {
@@ -126,6 +127,12 @@ export interface SiteSettings {
   storageMode?: 'free-local' | 'free-cloud';
   firebaseSyncEnabled?: boolean;
   firebaseLastSyncedAt?: number;
+
+  // Supabase Free Tier Cloud Storage (1 GB Free Forever)
+  supabaseUrl?: string;
+  supabaseAnonKey?: string;
+  supabaseBucket?: string;
+  supabaseAutoUpload?: boolean;
 
   // Watermark & IP Copyright Protection Settings
   watermarkEnabled?: boolean;

@@ -4,6 +4,7 @@ import { StorageService } from '../../services/storage';
 import { LOGO_EMBLEM, DEFAULT_STRIP_AVATARS, DEFAULT_VISION_IMAGES } from '../../data/initialData';
 import { convertDriveToDirectImageUrl } from '../../utils/driveHelper';
 import { FirebaseService } from '../../services/firebase';
+import { SupabaseService } from '../../services/supabase';
 import { WatermarkOverlay } from '../common/WatermarkOverlay';
 import { downloadWatermarkedPhoto } from '../../utils/watermark';
 import {
@@ -87,6 +88,17 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [syncStatusMsg, setSyncStatusMsg] = useState<string | null>(null);
   const [syncSuccess, setSyncSuccess] = useState<boolean | null>(null);
+
+  // Supabase Free Tier Storage State
+  const [supabaseTesting, setSupabaseTesting] = useState(false);
+  const [supabaseTestResult, setSupabaseTestResult] = useState<{
+    success: boolean;
+    message: string;
+    bucketFound?: boolean;
+    publicUrlSample?: string;
+  } | null>(null);
+  const [supabaseSyncing, setSupabaseSyncing] = useState(false);
+  const [supabaseSyncMsg, setSupabaseSyncMsg] = useState<string | null>(null);
 
   const logoFileInputId = useId();
   const avatarFileInputId = useId();
@@ -419,6 +431,55 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
       setTimeout(() => {
         setSyncStatusMsg(null);
       }, 5000);
+    }
+  };
+
+  // Test Supabase Connection & Bucket Access
+  const handleTestSupabase = async () => {
+    setSupabaseTesting(true);
+    setSupabaseTestResult(null);
+    try {
+      const res = await SupabaseService.testConnection(formData);
+      setSupabaseTestResult(res);
+    } catch (err: any) {
+      setSupabaseTestResult({
+        success: false,
+        message: err.message || 'Failed to connect to Supabase.',
+      });
+    } finally {
+      setSupabaseTesting(false);
+    }
+  };
+
+  // Migrate / Upload all local photos to Supabase Storage
+  const handleMigratePhotosToSupabase = async () => {
+    setSupabaseSyncing(true);
+    setSupabaseSyncMsg('Starting batch upload of local photos to Supabase Free Storage CDN...');
+    try {
+      const res = await SupabaseService.syncAllPhotosToSupabase(
+        photos,
+        (curr, total, msg) => {
+          setSupabaseSyncMsg(msg);
+        },
+        formData
+      );
+
+      if (res.uploadedCount > 0) {
+        StorageService.savePhotos(res.updatedPhotos);
+        // Force refresh parent photo list if possible
+        setSupabaseSyncMsg(`Success! Uploaded ${res.uploadedCount} photos to Supabase Free Tier Storage.`);
+      } else if (res.errors.length > 0) {
+        setSupabaseSyncMsg(`Notice: ${res.errors[0]}`);
+      } else {
+        setSupabaseSyncMsg('All photos are already hosted on Supabase or external CDN.');
+      }
+    } catch (err: any) {
+      setSupabaseSyncMsg(`Error: ${err.message || 'Supabase migration failed'}`);
+    } finally {
+      setSupabaseSyncing(false);
+      setTimeout(() => {
+        setSupabaseSyncMsg(null);
+      }, 6000);
     }
   };
 
@@ -1386,6 +1447,167 @@ export const SettingsManager: React.FC<SettingsManagerProps> = ({
                 100% private on your machine
               </span>
             </div>
+          </div>
+        </div>
+
+        {/* Supabase Free Tier Cloud Storage Configuration (1 GB Free Forever) */}
+        <div className="bg-white rounded-2xl border border-gray-200 p-6 sm:p-8 space-y-6 shadow-2xs">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-gray-100">
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h3 className="text-base font-bold text-gray-900 tracking-tight flex items-center gap-2">
+                  <Cloud className="w-4 h-4 text-emerald-600" />
+                  <span>Supabase Free Tier Cloud Storage</span>
+                </h3>
+                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200 text-[10px] uppercase tracking-wider font-extrabold">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                  1 GB Free Storage · $0.00 / mo
+                </span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1 font-normal">
+                Connect your free Supabase project to store and serve high-resolution wedding photography on a high-speed global CDN with 1 GB of free storage forever.
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleTestSupabase}
+                disabled={supabaseTesting || !formData.supabaseUrl || !formData.supabaseAnonKey}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full border border-gray-200 hover:border-black text-gray-800 text-xs font-bold transition-all cursor-pointer bg-gray-50 hover:bg-white disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Verify connection to your Supabase project and check public photo storage bucket"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-gray-600 ${supabaseTesting ? 'animate-spin' : ''}`} />
+                <span>{supabaseTesting ? 'Testing...' : 'Test Connection'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleMigratePhotosToSupabase}
+                disabled={supabaseSyncing || !formData.supabaseUrl || !formData.supabaseAnonKey}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all shadow-2xs cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Upload all local/base64 photos to your free Supabase Storage CDN"
+              >
+                <Zap className={`w-3.5 h-3.5 ${supabaseSyncing ? 'animate-spin' : ''}`} />
+                <span>{supabaseSyncing ? 'Uploading...' : 'Upload Photos (1-Click)'}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Test Result or Sync Message Banner */}
+          {supabaseTestResult && (
+            <div className={`p-4 rounded-xl border text-xs leading-relaxed ${
+              supabaseTestResult.success
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : 'bg-red-50 border-red-200 text-red-900'
+            }`}>
+              <div className="flex items-start gap-2">
+                {supabaseTestResult.success ? (
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                ) : (
+                  <X className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                )}
+                <div>
+                  <p className="font-bold">{supabaseTestResult.message}</p>
+                  {supabaseTestResult.publicUrlSample && (
+                    <p className="text-[11px] text-emerald-700 mt-1 font-mono">
+                      Sample CDN URL: {supabaseTestResult.publicUrlSample}
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {supabaseSyncMsg && (
+            <div className="p-3.5 rounded-xl bg-neutral-900 text-white text-xs font-semibold flex items-center gap-2 animate-fade-in">
+              <Zap className="w-4 h-4 text-emerald-400 shrink-0 animate-pulse" />
+              <span>{supabaseSyncMsg}</span>
+            </div>
+          )}
+
+          {/* Configuration Fields */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-gray-500 mb-1 font-bold">
+                Supabase Project URL
+              </label>
+              <input
+                type="url"
+                value={formData.supabaseUrl || ''}
+                onChange={(e) => setFormData({ ...formData, supabaseUrl: e.target.value })}
+                placeholder="https://xyzprojectid.supabase.co"
+                className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-black font-mono text-xs"
+              />
+              <p className="text-[11px] text-gray-500 mt-1">
+                Found in Supabase Dashboard &gt; Project Settings &gt; API &gt; Project URL.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-gray-500 mb-1 font-bold">
+                Supabase Public Anon Key
+              </label>
+              <input
+                type="password"
+                value={formData.supabaseAnonKey || ''}
+                onChange={(e) => setFormData({ ...formData, supabaseAnonKey: e.target.value })}
+                placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-black font-mono text-xs"
+              />
+              <p className="text-[11px] text-gray-500 mt-1">
+                Found in Supabase Dashboard &gt; Project Settings &gt; API &gt; anon public key.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-[10px] uppercase tracking-widest text-gray-500 mb-1 font-bold">
+                Storage Bucket Name
+              </label>
+              <input
+                type="text"
+                value={formData.supabaseBucket || 'photos'}
+                onChange={(e) => setFormData({ ...formData, supabaseBucket: e.target.value })}
+                placeholder="photos"
+                className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:border-black font-mono text-xs"
+              />
+              <p className="text-[11px] text-gray-500 mt-1">
+                Name of the Public Storage bucket in your Supabase project (default: <span className="font-mono">photos</span>).
+              </p>
+            </div>
+
+            <div className="flex flex-col justify-center">
+              <label className="block text-[10px] uppercase tracking-widest text-gray-500 mb-1.5 font-bold">
+                Auto-Upload to Supabase Free Tier
+              </label>
+              <label className="flex items-center gap-3 cursor-pointer p-2.5 rounded-xl border border-gray-200 hover:bg-gray-50 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={formData.supabaseAutoUpload !== false}
+                  onChange={(e) => setFormData({ ...formData, supabaseAutoUpload: e.target.checked })}
+                  className="w-4 h-4 rounded text-black focus:ring-black"
+                />
+                <span className="text-xs font-bold text-gray-800">
+                  Automatically upload newly added portfolio photos to Supabase Storage CDN
+                </span>
+              </label>
+            </div>
+          </div>
+
+          {/* Quick Setup Guide Step-by-Step */}
+          <div className="p-4 rounded-xl bg-gray-50 border border-gray-200 space-y-2">
+            <h4 className="text-xs font-bold text-gray-900 flex items-center gap-1.5">
+              <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+              <span>How to set up your 100% Free Supabase Photo Storage (in 2 minutes)</span>
+            </h4>
+            <ol className="text-[11px] text-gray-600 space-y-1 list-decimal list-inside leading-relaxed font-normal">
+              <li>Create a free account at <a href="https://supabase.com" target="_blank" rel="noopener noreferrer" className="text-emerald-700 underline font-bold">supabase.com</a> (Includes 1 GB storage &amp; 50,000 MAU free forever).</li>
+              <li>Create a new project and open the <strong>Storage</strong> tab in the sidebar.</li>
+              <li>Click <strong>New Bucket</strong>, name it <span className="font-mono font-bold text-black">photos</span>, and toggle <strong>Public bucket</strong> to <span className="font-bold text-emerald-700">ON</span>.</li>
+              <li>Go to <strong>Project Settings &gt; API</strong>, copy your <strong>Project URL</strong> and <strong>anon key</strong>, paste them above, and click <strong>Test Connection</strong>.</li>
+            </ol>
           </div>
         </div>
 

@@ -5,6 +5,7 @@ import { IdbStorage } from '../../services/indexedDb';
 import { OptimizedImage } from '../common/OptimizedImage';
 import { MOMENT_SUGGESTIONS, DEFAULT_STRIP_AVATARS } from '../../data/initialData';
 import { FirebaseService } from '../../services/firebase';
+import { SupabaseService } from '../../services/supabase';
 import {
   extractDriveFileId,
   convertDriveToDirectImageUrl,
@@ -108,6 +109,7 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
   const [confirmDeletePhotoId, setConfirmDeletePhotoId] = useState<string | null>(null);
   const [photoNotice, setPhotoNotice] = useState<string | null>(null);
   const [cloudSyncing, setCloudSyncing] = useState(false);
+  const [supabaseSyncing, setSupabaseSyncing] = useState(false);
   const [storageEstimate, setStorageEstimate] = useState<{
     usageFormatted: string;
     quotaFormatted: string;
@@ -115,6 +117,7 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
   } | null>(null);
 
   const fileInputId = useId();
+  const isSupabaseConfigured = SupabaseService.isConfigured(settings);
 
   // Load storage usage info
   useEffect(() => {
@@ -139,6 +142,43 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
     } finally {
       setLoading(false);
       setTimeout(() => setPhotoNotice(null), 3500);
+    }
+  };
+
+  // 1-Click Sync/Migrate All Local Photos to Supabase Free Tier Storage
+  const handleSyncToSupabase = async () => {
+    if (!isSupabaseConfigured) {
+      setPhotoNotice('Please configure your Supabase Project URL and Anon Key in Settings first.');
+      setTimeout(() => setPhotoNotice(null), 4000);
+      return;
+    }
+
+    setSupabaseSyncing(true);
+    setPhotoNotice('Starting Supabase Free Storage sync for local photographs...');
+
+    try {
+      const res = await SupabaseService.syncAllPhotosToSupabase(
+        photos,
+        (current, total, msg) => {
+          setPhotoNotice(msg);
+        },
+        settings
+      );
+
+      if (res.uploadedCount > 0) {
+        StorageService.savePhotos(res.updatedPhotos);
+        onPhotosUpdated(res.updatedPhotos);
+        setPhotoNotice(`Successfully uploaded ${res.uploadedCount} photographs to Supabase Free Storage CDN!`);
+      } else if (res.errors.length > 0) {
+        setPhotoNotice(`Supabase sync notice: ${res.errors[0]}`);
+      } else {
+        setPhotoNotice('All photographs are already hosted on Supabase or external CDN.');
+      }
+    } catch (err: any) {
+      setPhotoNotice(`Supabase sync error: ${err.message || 'Unknown error'}`);
+    } finally {
+      setSupabaseSyncing(false);
+      setTimeout(() => setPhotoNotice(null), 4500);
     }
   };
 
@@ -335,7 +375,7 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
       return;
     }
 
-    // If single URL mode without queue
+    // If single URL/upload mode without queue
     if (uploadQueue.length === 0) {
       if (!singleFormData.image) {
         setError('Please select photos from your device, paste a Drive link, or enter an Image URL');
@@ -343,22 +383,52 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
       }
 
       setLoading(true);
+      let finalImageUrl = convertDriveToDirectImageUrl(singleFormData.image);
+      let storageType: PhotoItem['storageType'] = isDriveUrl(singleFormData.image)
+        ? 'drive'
+        : singleFormData.image.startsWith('data:')
+        ? 'local'
+        : 'url';
+      let supabasePath: string | undefined = undefined;
+
+      // Auto-upload to Supabase Free Tier CDN if configured
+      if (isSupabaseConfigured && settings.supabaseAutoUpload !== false && singleFormData.image.startsWith('data:')) {
+        setUploadProgress('Uploading photo to Supabase Free Storage CDN...');
+        try {
+          const upRes = await SupabaseService.uploadPhoto(singleFormData.image, {
+            fileName: singleFormData.coupleName || singleFormData.caption || 'wedding_photo',
+            customSettings: settings,
+          });
+          if (upRes.success && upRes.url) {
+            finalImageUrl = upRes.url;
+            storageType = 'supabase';
+            supabasePath = upRes.path;
+          }
+        } catch (err) {
+          console.warn('Supabase single upload fallback to local:', err);
+        }
+      }
+
       const newPhoto: PhotoItem = {
         id: 'photo_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
-        image: convertDriveToDirectImageUrl(singleFormData.image),
+        image: finalImageUrl,
         caption: singleFormData.caption.trim(),
         moment: singleFormData.moment.trim(),
         coupleName: singleFormData.coupleName.trim(),
         date: singleFormData.date,
         featured: singleFormData.featured,
         createdAt: Date.now(),
+        storageType,
+        supabasePath,
+        cloudSynced: storageType === 'supabase',
       };
       const updated = [newPhoto, ...photos];
       StorageService.savePhotos(updated);
       await StorageService.saveSinglePhoto(newPhoto);
       onPhotosUpdated(updated);
       setLoading(false);
-      setPhotoNotice('Photograph added to portfolio.');
+      setUploadProgress(null);
+      setPhotoNotice(storageType === 'supabase' ? 'Photograph uploaded to Supabase Free Storage CDN!' : 'Photograph added to portfolio.');
       setTimeout(() => setPhotoNotice(null), 3000);
       resetForm();
       return;
@@ -366,16 +436,46 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
 
     // If multi-file or multi-drive queue exists
     setLoading(true);
-    const newPhotos: PhotoItem[] = uploadQueue.map((item, idx) => ({
-      id: 'photo_' + (Date.now() + idx).toString(36) + Math.random().toString(36).slice(2, 6),
-      image: item.preview,
-      caption: item.caption.trim(),
-      moment: item.moment.trim(),
-      coupleName: item.coupleName.trim(),
-      date: item.date,
-      featured: item.featured,
-      createdAt: Date.now() + idx,
-    }));
+    const newPhotos: PhotoItem[] = [];
+
+    for (let idx = 0; idx < uploadQueue.length; idx++) {
+      const item = uploadQueue[idx];
+      let finalImageUrl = item.preview;
+      let storageType: PhotoItem['storageType'] = item.preview.startsWith('data:') ? 'local' : 'url';
+      let supabasePath: string | undefined = undefined;
+
+      // Auto-upload to Supabase Free Tier CDN if configured
+      if (isSupabaseConfigured && settings.supabaseAutoUpload !== false && (item.file || item.preview.startsWith('data:'))) {
+        setUploadProgress(`Uploading ${idx + 1} of ${uploadQueue.length} to Supabase CDN...`);
+        try {
+          const upRes = await SupabaseService.uploadPhoto(item.file || item.preview, {
+            fileName: item.coupleName || item.caption || `photo_${idx + 1}`,
+            customSettings: settings,
+          });
+          if (upRes.success && upRes.url) {
+            finalImageUrl = upRes.url;
+            storageType = 'supabase';
+            supabasePath = upRes.path;
+          }
+        } catch (err) {
+          console.warn('Supabase batch upload fallback to local item:', err);
+        }
+      }
+
+      newPhotos.push({
+        id: 'photo_' + (Date.now() + idx).toString(36) + Math.random().toString(36).slice(2, 6),
+        image: finalImageUrl,
+        caption: item.caption.trim(),
+        moment: item.moment.trim(),
+        coupleName: item.coupleName.trim(),
+        date: item.date,
+        featured: item.featured,
+        createdAt: Date.now() + idx,
+        storageType,
+        supabasePath,
+        cloudSynced: storageType === 'supabase',
+      });
+    }
 
     const updated = [...newPhotos, ...photos];
     StorageService.savePhotos(updated);
@@ -384,8 +484,9 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
     }
     onPhotosUpdated(updated);
     setLoading(false);
-    setPhotoNotice(`Added ${newPhotos.length} photographs to portfolio.`);
-    setTimeout(() => setPhotoNotice(null), 3000);
+    setUploadProgress(null);
+    setPhotoNotice(`Added ${newPhotos.length} photographs to portfolio (${isSupabaseConfigured ? 'Supabase CDN Connected' : 'IndexedDB Local'}).`);
+    setTimeout(() => setPhotoNotice(null), 3500);
     resetForm();
   };
 
@@ -535,10 +636,10 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
         )}
       </div>
 
-      {/* Storage Base & Cloud Backup Dual Bar */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Persistent Storage Base Bar */}
-        <div className="p-4 sm:p-5 bg-white rounded-2xl border border-gray-200 shadow-2xs flex items-center justify-between gap-4">
+      {/* Storage Base, Supabase Cloud Storage & Drive Triple Bar */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {/* Persistent Local IndexedDB Engine */}
+        <div className="p-4 sm:p-5 bg-white rounded-2xl border border-gray-200 shadow-2xs flex flex-col justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0">
               <Database className="w-5 h-5" />
@@ -546,29 +647,29 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <span className="text-xs font-bold text-gray-900 truncate">
-                  Storage Engine:
+                  Local Engine:
                 </span>
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 text-[10px] font-bold shrink-0">
                   <ShieldCheck className="w-3 h-3 text-emerald-600" />
-                  100% Free IndexedDB ({photos.length} Photos)
+                  IndexedDB Free
                 </span>
               </div>
               <p className="text-[11px] text-gray-500 mt-0.5 truncate">
-                Zero Cloud Billing · <span className="font-semibold text-gray-700">{storageEstimate?.usageFormatted || 'Ready'} used</span> · Permanent
+                {photos.length} photos · <span className="font-semibold text-gray-700">{storageEstimate?.usageFormatted || 'Ready'}</span>
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
             <button
               type="button"
               onClick={handleReloadFromStorage}
               disabled={loading}
               title="Resync and reload photographs from local high-capacity storage"
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-full border border-gray-200 hover:border-black text-gray-800 text-[11px] font-bold transition-all cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-gray-200 hover:border-black text-gray-800 text-[11px] font-bold transition-all cursor-pointer"
             >
               <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Reload</span>
+              <span>Reload</span>
             </button>
             <button
               type="button"
@@ -584,16 +685,58 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
                 setTimeout(() => setPhotoNotice(null), 3000);
               }}
               title="Download 100% free JSON backup of all photo assets"
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-full bg-neutral-900 hover:bg-black text-white text-[11px] uppercase tracking-wider font-bold transition-all shadow-xs cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-neutral-900 hover:bg-black text-white text-[11px] font-bold transition-all shadow-xs cursor-pointer ml-auto"
             >
               <Download className="w-3 h-3" />
-              <span>Export Photos</span>
+              <span>Export JSON</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Supabase Free Tier Cloud Storage Bar */}
+        <div className="p-4 sm:p-5 bg-white rounded-2xl border border-gray-200 shadow-2xs flex flex-col justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
+              <Cloud className="w-5 h-5" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs font-bold text-gray-900 truncate">
+                  Supabase CDN:
+                </span>
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold shrink-0 ${
+                  isSupabaseConfigured ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-amber-50 text-amber-800 border border-amber-200'
+                }`}>
+                  <span className={`w-1.5 h-1.5 rounded-full ${isSupabaseConfigured ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`}></span>
+                  {isSupabaseConfigured ? '1 GB Free Storage Active' : 'Not Connected'}
+                </span>
+              </div>
+              <p className="text-[11px] text-gray-500 mt-0.5 truncate">
+                {photos.filter((p) => p.storageType === 'supabase' || p.image.includes('.supabase.co')).length} photos hosted on Supabase CDN
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 pt-1 border-t border-gray-100">
+            <button
+              type="button"
+              onClick={handleSyncToSupabase}
+              disabled={supabaseSyncing || !isSupabaseConfigured}
+              title={isSupabaseConfigured ? 'Upload all local base64 photos to Supabase Free Tier Storage CDN' : 'Configure Supabase in Settings first'}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[11px] font-bold transition-all cursor-pointer w-full justify-center ${
+                isSupabaseConfigured
+                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs'
+                  : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+              }`}
+            >
+              <Zap className={`w-3 h-3 ${supabaseSyncing ? 'animate-spin' : ''}`} />
+              <span>{supabaseSyncing ? 'Uploading to Supabase...' : 'Sync Local to Supabase Free CDN'}</span>
             </button>
           </div>
         </div>
 
         {/* Google Drive Link Quick Bar */}
-        <div className="p-4 sm:p-5 bg-white rounded-2xl border border-gray-200 shadow-2xs flex items-center justify-between gap-4">
+        <div className="p-4 sm:p-5 bg-white rounded-2xl border border-gray-200 shadow-2xs flex flex-col justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
             <div className="w-10 h-10 rounded-xl bg-neutral-100 text-neutral-700 flex items-center justify-center shrink-0">
               <HardDrive className="w-5 h-5" />
@@ -601,19 +744,19 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
             <div className="min-w-0">
               <div className="flex items-center gap-2">
                 <span className="text-xs font-bold text-gray-900 truncate">
-                  Drive Folder:
+                  Drive Vault:
                 </span>
-                <span className="px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 text-[10px] font-mono truncate max-w-[130px]">
+                <span className="px-2 py-0.5 rounded-md bg-gray-100 text-gray-700 text-[10px] font-mono truncate max-w-[110px]">
                   {settings.driveFolderUrl ? 'Configured' : 'Not set'}
                 </span>
               </div>
               <p className="text-[11px] text-gray-500 mt-0.5 truncate">
-                Direct link to your master RAW &amp; high-res Drive vault
+                Master RAW &amp; high-res Drive vault link
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 shrink-0">
+          <div className="flex items-center gap-1.5 pt-1 border-t border-gray-100 justify-end">
             {settings.driveFolderUrl && settings.driveFolderUrl.startsWith('http') && (
               <a
                 href={settings.driveFolderUrl}
@@ -621,7 +764,7 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full border border-gray-200 hover:border-black text-[11px] font-bold text-gray-800 transition-colors"
               >
-                <span>Drive</span>
+                <span>Open Drive</span>
                 <ExternalLink className="w-3 h-3" />
               </a>
             )}
@@ -633,7 +776,7 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
               className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-gray-100 hover:bg-black hover:text-white text-[11px] font-bold text-gray-800 transition-colors cursor-pointer"
             >
               <FolderSync className="w-3 h-3" />
-              <span>Edit</span>
+              <span>Edit Link</span>
             </button>
           </div>
         </div>
@@ -1261,6 +1404,12 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
                     {settings.stripAvatars?.some((a) => a.src === photo.image) && (
                       <span className="px-2 py-0.5 rounded-full bg-amber-400 text-black text-[9px] uppercase tracking-widest font-extrabold shadow-xs">
                         Story Strip
+                      </span>
+                    )}
+                    {(photo.storageType === 'supabase' || photo.image.includes('.supabase.co')) && (
+                      <span className="px-2 py-0.5 rounded-full bg-emerald-600 text-white text-[8px] uppercase tracking-wider font-extrabold shadow-xs flex items-center gap-1">
+                        <Cloud className="w-2.5 h-2.5" />
+                        Supabase CDN
                       </span>
                     )}
                   </div>
