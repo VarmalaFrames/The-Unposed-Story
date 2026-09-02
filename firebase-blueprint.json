@@ -1,0 +1,126 @@
+{
+  "$schema": "https://raw.githubusercontent.com/firebase/firebase-tools/master/schema/blueprint.schema.json",
+  "entities": {
+    "photos": {
+      "title": "Photo Item",
+      "description": "Portfolio wedding photos stored in Firebase Firestore database",
+      "properties": {
+        "id": { "type": "string" },
+        "image": { "type": "string" },
+        "caption": { "type": "string" },
+        "moment": { "type": "string" },
+        "coupleName": { "type": "string" },
+        "date": { "type": "string" },
+        "featured": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "image", "createdAt"]
+    },
+    "inquiries": {
+      "title": "Client Inquiry",
+      "description": "Wedding inquiries submitted by prospective clients with auto-reply tracking",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "weddingDate": { "type": "string" },
+        "message": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "read": { "type": "boolean" },
+        "autoReplied": { "type": "boolean" },
+        "autoReplySentAt": { "type": "number" }
+      },
+      "required": ["id", "name", "email", "message", "createdAt"]
+    },
+    "settings": {
+      "title": "Site Settings",
+      "description": "Global website configuration, contact details, branding, and templates",
+      "properties": {
+        "siteName": { "type": "string" },
+        "tagline": { "type": "string" },
+        "contactEmail": { "type": "string" },
+        "contactPhone": { "type": "string" },
+        "autoReplyEnabled": { "type": "boolean" },
+        "autoReplySubject": { "type": "string" },
+        "autoReplyMessage": { "type": "string" },
+        "autoReplyBrochureUrl": { "type": "string" }
+      }
+    },
+    "packages": {
+      "title": "Package Item",
+      "description": "Wedding photography and cinematography investment packages",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "string" },
+        "description": { "type": "string" },
+        "highlight": { "type": "boolean" }
+      },
+      "required": ["id", "name", "price", "description"]
+    },
+    "testimonials": {
+      "title": "Testimonial Item",
+      "description": "Client reviews and quotes",
+      "properties": {
+        "id": { "type": "string" },
+        "coupleName": { "type": "string" },
+        "quote": { "type": "string" },
+        "date": { "type": "string" }
+      },
+      "required": ["id", "coupleName", "quote"]
+    },
+    "faqs": {
+      "title": "FAQ Item",
+      "description": "Frequently asked questions and answers",
+      "properties": {
+        "id": { "type": "string" },
+        "question": { "type": "string" },
+        "answer": { "type": "string" }
+      },
+      "required": ["id", "question", "answer"]
+    },
+    "films": {
+      "title": "Film Item",
+      "description": "Cinematic wedding films and teasers",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "videoUrl": { "type": "string" },
+        "provider": { "type": "string" },
+        "coverImage": { "type": "string" }
+      },
+      "required": ["id", "title", "videoUrl"]
+    }
+  },
+  "firestore": {
+    "/photos/{photoId}": {
+      "schema": { "$ref": "#/entities/photos" },
+      "description": "Individual wedding photos"
+    },
+    "/inquiries/{inquiryId}": {
+      "schema": { "$ref": "#/entities/inquiries" },
+      "description": "Client booking inquiries"
+    },
+    "/settings/{docId}": {
+      "schema": { "$ref": "#/entities/settings" },
+      "description": "Studio site settings"
+    },
+    "/packages/{pkgId}": {
+      "schema": { "$ref": "#/entities/packages" },
+      "description": "Investment packages"
+    },
+    "/testimonials/{testId}": {
+      "schema": { "$ref": "#/entities/testimonials" },
+      "description": "Client testimonials"
+    },
+    "/faqs/{faqId}": {
+      "schema": { "$ref": "#/entities/faqs" },
+      "description": "FAQs"
+    },
+    "/films/{filmId}": {
+      "schema": { "$ref": "#/entities/films" },
+      "description": "Wedding films"
+    }
+  }
+}

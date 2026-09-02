@@ -1,0 +1,40 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Photos collection - public read and manage
+    match /photos/{photoId} {
+      allow read, write: if true;
+    }
+
+    // Inquiries collection - public can create inquiries; read/update/delete permitted
+    match /inquiries/{inquiryId} {
+      allow create: if true;
+      allow read, update, delete: if true;
+    }
+
+    // Site settings document
+    match /settings/{docId} {
+      allow read, write: if true;
+    }
+
+    // Packages collection
+    match /packages/{pkgId} {
+      allow read, write: if true;
+    }
+
+    // Testimonials collection
+    match /testimonials/{testId} {
+      allow read, write: if true;
+    }
+
+    // FAQs collection
+    match /faqs/{faqId} {
+      allow read, write: if true;
+    }
+
+    // Films collection
+    match /films/{filmId} {
+      allow read, write: if true;
+    }
+  }
+}

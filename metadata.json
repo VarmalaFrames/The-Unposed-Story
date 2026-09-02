@@ -1,0 +1,8 @@
+{
+  "name": "Remix The Unposed Story",
+  "description": "Mumbai-based wedding photography and cinematic filmmaking studio capturing candid, emotional, and timeless wedding stories.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
