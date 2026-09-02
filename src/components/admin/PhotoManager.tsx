@@ -308,11 +308,12 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
     // If editing existing single photo
     if (editingPhoto) {
       setLoading(true);
+      const directImage = convertDriveToDirectImageUrl(singleFormData.image);
       const updated = photos.map((p) =>
         p.id === editingPhoto.id
           ? {
               ...p,
-              image: convertDriveToDirectImageUrl(singleFormData.image),
+              image: directImage,
               caption: singleFormData.caption.trim(),
               moment: singleFormData.moment.trim(),
               coupleName: singleFormData.coupleName.trim(),
@@ -322,6 +323,10 @@ export const PhotoManager: React.FC<PhotoManagerProps> = ({
           : p
       );
       StorageService.savePhotos(updated);
+      const editedItem = updated.find((p) => p.id === editingPhoto.id);
+      if (editedItem) {
+        await StorageService.saveSinglePhoto(editedItem);
+      }
       onPhotosUpdated(updated);
       setLoading(false);
       setPhotoNotice('Photograph updated successfully.');

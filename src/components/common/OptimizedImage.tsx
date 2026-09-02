@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { getOptimizedImageUrl } from '../../utils/imageOptimizer';
+import { extractDriveFileId, getDriveAlternativeUrls } from '../../utils/driveHelper';
 import { SiteSettings } from '../../types';
 import { WatermarkOverlay } from './WatermarkOverlay';
 import { ImageOff } from 'lucide-react';
@@ -35,7 +36,17 @@ export const OptimizedImage: React.FC<OptimizedImageProps> = ({
 }) => {
   const [loaded, setLoaded] = useState<boolean>(false);
   const [hasError, setHasError] = useState<boolean>(false);
-  const [attemptedRawFallback, setAttemptedRawFallback] = useState<boolean>(false);
+  const [fallbackIndex, setFallbackIndex] = useState<number>(0);
+  const fallbackUrlsRef = useRef<string[]>([]);
+
+  // Compute fallback URLs if this is a Google Drive image
+  const driveFallbacks = React.useMemo(() => {
+    const fileId = extractDriveFileId(src);
+    if (fileId) {
+      return getDriveAlternativeUrls(src, targetWidth);
+    }
+    return [];
+  }, [src, targetWidth]);
 
   // Compute optimized URL based on CDN / Direct link
   const optimizedSrc = React.useMemo(() => {
@@ -47,14 +58,21 @@ export const OptimizedImage: React.FC<OptimizedImageProps> = ({
   useEffect(() => {
     setLoaded(false);
     setHasError(false);
-    setAttemptedRawFallback(false);
+    setFallbackIndex(0);
+    fallbackUrlsRef.current = driveFallbacks.length > 0 ? driveFallbacks : [src];
     setActiveSrc(optimizedSrc || src || '');
-  }, [src, optimizedSrc]);
+  }, [src, optimizedSrc, driveFallbacks]);
 
   const handleError = () => {
-    // If the optimized URL failed and we haven't tried the raw src, retry with the raw src
-    if (!attemptedRawFallback && activeSrc !== src && src) {
-      setAttemptedRawFallback(true);
+    // If we have alternative Drive or raw URLs in our fallback chain, try the next one
+    const fallbacks = fallbackUrlsRef.current;
+    const nextIndex = fallbackIndex + 1;
+    if (nextIndex < fallbacks.length) {
+      setFallbackIndex(nextIndex);
+      setActiveSrc(fallbacks[nextIndex]);
+    } else if (activeSrc !== src && src) {
+      // Try raw src as final attempt
+      setFallbackIndex(fallbacks.length);
       setActiveSrc(src);
     } else {
       setHasError(true);
@@ -92,6 +110,7 @@ export const OptimizedImage: React.FC<OptimizedImageProps> = ({
             decoding="async"
             fetchPriority={priority ? 'high' : 'auto'}
             referrerPolicy="no-referrer"
+            crossOrigin="anonymous"
             draggable={!shouldPreventStealing}
             onLoad={() => setLoaded(true)}
             onError={handleError}
@@ -109,4 +128,5 @@ export const OptimizedImage: React.FC<OptimizedImageProps> = ({
     </div>
   );
 };
+
 

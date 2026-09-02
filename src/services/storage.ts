@@ -100,37 +100,42 @@ export const StorageService = {
   mergePhotos(cloudPhotos: PhotoItem[] | null, idbPhotos: PhotoItem[] | null): PhotoItem[] {
     const photoMap = new Map<string, PhotoItem>();
 
-    // 1. Seed initial baseline photos so the portfolio is always richly populated
-    for (const p of INITIAL_PHOTOS) {
-      if (p && p.id) {
-        photoMap.set(p.id, p);
-      }
-    }
-
-    // 2. Add/override with cloud photos from Firestore
-    if (cloudPhotos && Array.isArray(cloudPhotos)) {
+    // 1. If cloud photos exist (Firestore is populated), CLOUD IS THE SOURCE OF TRUTH!
+    if (cloudPhotos && Array.isArray(cloudPhotos) && cloudPhotos.length > 0) {
       for (const p of cloudPhotos) {
         if (p && p.id) {
           photoMap.set(p.id, p);
         }
       }
-    }
 
-    // 3. Add IDB photos (preserve any newly uploaded photos not yet synced to cloud)
-    if (idbPhotos && Array.isArray(idbPhotos)) {
-      for (const p of idbPhotos) {
-        if (p && p.id) {
-          const existing = photoMap.get(p.id);
-          if (!existing || (p.createdAt || 0) >= (existing.createdAt || 0)) {
+      // Merge in any pending offline photos from IDB that are not yet in cloud
+      if (idbPhotos && Array.isArray(idbPhotos)) {
+        for (const p of idbPhotos) {
+          if (p && p.id && !photoMap.has(p.id)) {
             photoMap.set(p.id, p);
           }
         }
       }
+
+      const merged = Array.from(photoMap.values());
+      merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      return merged;
     }
 
-    const merged = Array.from(photoMap.values());
-    merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-    return merged.length > 0 ? merged : INITIAL_PHOTOS;
+    // 2. If no cloud photos yet, check if local IDB has existing photos
+    if (idbPhotos && Array.isArray(idbPhotos) && idbPhotos.length > 0) {
+      for (const p of idbPhotos) {
+        if (p && p.id) {
+          photoMap.set(p.id, p);
+        }
+      }
+      const merged = Array.from(photoMap.values());
+      merged.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+      return merged;
+    }
+
+    // 3. Only if completely uninitialized (fresh clean slate on all tiers), use INITIAL_PHOTOS as first-time seed
+    return INITIAL_PHOTOS;
   },
 
   /**
@@ -145,12 +150,9 @@ export const StorageService = {
 
       const mergedPhotos = this.mergePhotos(cloudPhotos, idbPhotos);
 
-      // Save merged canonical list to both IndexedDB and Firestore
+      // Save merged canonical list to local stores (IndexedDB and LocalStorage)
       await IdbStorage.saveAllPhotos(mergedPhotos).catch(() => {});
       setItem(KEYS.PHOTOS, mergedPhotos);
-
-      // Sync any missing items to Firestore
-      FirebaseService.saveAllPhotos(mergedPhotos).catch(() => {});
 
       return mergedPhotos;
     } catch (err) {
@@ -160,7 +162,7 @@ export const StorageService = {
   },
 
   /**
-   * Universal photo save method: saves to IndexedDB + LocalStorage + Firebase Firestore
+   * Universal photo save method: saves to IndexedDB + LocalStorage
    */
   savePhotos(photos: PhotoItem[]): boolean {
     // 1. Save immediately to high-capacity IndexedDB
@@ -171,11 +173,6 @@ export const StorageService = {
     // 2. Cache in LocalStorage
     setItem(KEYS.PHOTOS, photos);
 
-    // 3. Sync immediately to Firebase Firestore
-    FirebaseService.saveAllPhotos(photos).catch((err) => {
-      console.warn('Firebase saveAllPhotos error:', err);
-    });
-
     return true;
   },
 
@@ -184,9 +181,9 @@ export const StorageService = {
    */
   async saveSinglePhoto(photo: PhotoItem): Promise<boolean> {
     await IdbStorage.saveSinglePhoto(photo);
-    await FirebaseService.savePhoto(photo).catch((err) => {
-      console.warn('Firebase savePhoto error:', err);
-    });
+    if (!FirebaseService.isQuotaLimited()) {
+      await FirebaseService.savePhoto(photo).catch(() => {});
+    }
     const all = await IdbStorage.getAllPhotos();
     setItem(KEYS.PHOTOS, all);
     return true;
@@ -215,6 +212,13 @@ export const StorageService = {
     return setItem(KEYS.PACKAGES, pkgs);
   },
 
+  async deletePackage(id: string): Promise<boolean> {
+    const pkgs = this.getPackages().filter((p) => p.id !== id);
+    this.savePackages(pkgs);
+    await FirebaseService.deletePackage(id).catch(() => {});
+    return true;
+  },
+
   getTestimonials(): TestimonialItem[] {
     return getItem<TestimonialItem[]>(KEYS.TESTIMONIALS, INITIAL_TESTIMONIALS);
   },
@@ -223,6 +227,13 @@ export const StorageService = {
     IdbStorage.setItem(KEYS.TESTIMONIALS, items).catch(() => {});
     FirebaseService.saveTestimonials(items).catch(() => {});
     return setItem(KEYS.TESTIMONIALS, items);
+  },
+
+  async deleteTestimonial(id: string): Promise<boolean> {
+    const list = this.getTestimonials().filter((t) => t.id !== id);
+    this.saveTestimonials(list);
+    await FirebaseService.deleteTestimonial(id).catch(() => {});
+    return true;
   },
 
   getFaqs(): FaqItem[] {
@@ -235,6 +246,13 @@ export const StorageService = {
     return setItem(KEYS.FAQS, faqs);
   },
 
+  async deleteFaq(id: string): Promise<boolean> {
+    const list = this.getFaqs().filter((f) => f.id !== id);
+    this.saveFaqs(list);
+    await FirebaseService.deleteFaq(id).catch(() => {});
+    return true;
+  },
+
   getFilms(): FilmItem[] {
     return getItem<FilmItem[]>(KEYS.FILMS, INITIAL_FILMS);
   },
@@ -243,6 +261,13 @@ export const StorageService = {
     IdbStorage.setItem(KEYS.FILMS, films).catch(() => {});
     FirebaseService.saveFilms(films).catch(() => {});
     return setItem(KEYS.FILMS, films);
+  },
+
+  async deleteFilm(id: string): Promise<boolean> {
+    const list = this.getFilms().filter((f) => f.id !== id);
+    this.saveFilms(list);
+    await FirebaseService.deleteFilm(id).catch(() => {});
+    return true;
   },
 
   getInquiries(): InquiryItem[] {
@@ -304,8 +329,6 @@ export const StorageService = {
       const photos = this.mergePhotos(cloudPhotos, idbPhotos);
       await IdbStorage.saveAllPhotos(photos).catch(() => {});
       setItem(KEYS.PHOTOS, photos);
-      // Sync any missing to cloud in background
-      FirebaseService.saveAllPhotos(photos).catch(() => {});
 
       // Resolve Settings
       let settings: SiteSettings;
@@ -319,10 +342,8 @@ export const StorageService = {
         setItem(KEYS.SETTINGS, settings);
       } else if (idbSettings) {
         settings = idbSettings;
-        FirebaseService.saveSettings(idbSettings).catch(() => {});
       } else {
         settings = this.getSettings();
-        FirebaseService.saveSettings(settings).catch(() => {});
       }
 
       // Resolve Films
@@ -333,10 +354,8 @@ export const StorageService = {
         setItem(KEYS.FILMS, cloudFilms);
       } else if (idbFilms && idbFilms.length > 0) {
         films = idbFilms;
-        FirebaseService.saveFilms(idbFilms).catch(() => {});
       } else {
         films = INITIAL_FILMS;
-        FirebaseService.saveFilms(INITIAL_FILMS).catch(() => {});
       }
 
       // Resolve Packages
@@ -347,10 +366,8 @@ export const StorageService = {
         setItem(KEYS.PACKAGES, cloudPackages);
       } else if (idbPackages && idbPackages.length > 0) {
         packages = idbPackages;
-        FirebaseService.savePackages(idbPackages).catch(() => {});
       } else {
         packages = INITIAL_PACKAGES;
-        FirebaseService.savePackages(INITIAL_PACKAGES).catch(() => {});
       }
 
       // Resolve Testimonials
@@ -361,10 +378,8 @@ export const StorageService = {
         setItem(KEYS.TESTIMONIALS, cloudTestimonials);
       } else if (idbTestimonials && idbTestimonials.length > 0) {
         testimonials = idbTestimonials;
-        FirebaseService.saveTestimonials(idbTestimonials).catch(() => {});
       } else {
         testimonials = INITIAL_TESTIMONIALS;
-        FirebaseService.saveTestimonials(INITIAL_TESTIMONIALS).catch(() => {});
       }
 
       // Resolve FAQs
@@ -375,10 +390,8 @@ export const StorageService = {
         setItem(KEYS.FAQS, cloudFaqs);
       } else if (idbFaqs && idbFaqs.length > 0) {
         faqs = idbFaqs;
-        FirebaseService.saveFaqs(idbFaqs).catch(() => {});
       } else {
         faqs = INITIAL_FAQS;
-        FirebaseService.saveFaqs(INITIAL_FAQS).catch(() => {});
       }
 
       // Resolve Inquiries
@@ -389,9 +402,6 @@ export const StorageService = {
         setItem(KEYS.INQUIRIES, cloudInquiries);
       } else if (idbInquiries && idbInquiries.length > 0) {
         inquiries = idbInquiries;
-        for (const inq of idbInquiries) {
-          FirebaseService.saveInquiry(inq).catch(() => {});
-        }
       } else {
         inquiries = this.getInquiries();
       }

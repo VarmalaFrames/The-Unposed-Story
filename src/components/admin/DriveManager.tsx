@@ -80,7 +80,7 @@ export const DriveManager: React.FC<DriveManagerProps> = ({
   };
 
   // Direct Add from Converter to Portfolio
-  const handleAddConvertedToPortfolio = () => {
+  const handleAddConvertedToPortfolio = async () => {
     if (!convertedUrl) return;
     setAddingToPortfolio(true);
 
@@ -98,6 +98,7 @@ export const DriveManager: React.FC<DriveManagerProps> = ({
     const currentPhotos = photos.length > 0 ? photos : StorageService.getPhotos();
     const updated = [newPhoto, ...currentPhotos];
     StorageService.savePhotos(updated);
+    await StorageService.saveSinglePhoto(newPhoto);
     if (onPhotosUpdated) {
       onPhotosUpdated(updated);
     }
@@ -108,6 +109,15 @@ export const DriveManager: React.FC<DriveManagerProps> = ({
       setTestDriveLink('');
       setConvertedUrl('');
     }, 1800);
+  };
+
+  const [copiedUrlNotice, setCopiedUrlNotice] = useState(false);
+
+  const handleCopyUrl = () => {
+    if (!convertedUrl) return;
+    navigator.clipboard.writeText(convertedUrl);
+    setCopiedUrlNotice(true);
+    setTimeout(() => setCopiedUrlNotice(false), 2500);
   };
 
   const detectedFolderId = extractDriveFolderId(driveFolderUrl);
@@ -291,14 +301,20 @@ export const DriveManager: React.FC<DriveManagerProps> = ({
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(convertedUrl);
-                      alert('Direct image URL copied to clipboard!');
-                    }}
+                    onClick={handleCopyUrl}
                     className="px-3.5 py-2 rounded-full border border-gray-200 bg-white hover:border-black text-xs font-bold text-gray-700 hover:text-black flex items-center gap-1.5 cursor-pointer"
                   >
-                    <Copy className="w-3.5 h-3.5" />
-                    <span>Copy URL</span>
+                    {copiedUrlNotice ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        <span className="text-emerald-700">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span>Copy URL</span>
+                      </>
+                    )}
                   </button>
 
                   <button

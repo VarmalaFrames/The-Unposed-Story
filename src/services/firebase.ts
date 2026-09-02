@@ -57,9 +57,46 @@ export interface FirestoreErrorInfo {
   };
 }
 
+// Quota management and rate limiting
+const QUOTA_KEY = 'unposed_firestore_quota_exhausted';
+let isQuotaExceeded = false;
+
+// Check if quota limit was reached recently (within last 3 hours)
+try {
+  const recorded = localStorage.getItem(QUOTA_KEY);
+  if (recorded) {
+    const elapsed = Date.now() - parseInt(recorded, 10);
+    if (elapsed < 3 * 60 * 60 * 1000) {
+      isQuotaExceeded = true;
+    } else {
+      localStorage.removeItem(QUOTA_KEY);
+    }
+  }
+} catch {
+  // Ignore localStorage access errors
+}
+
+export function markQuotaExhausted() {
+  isQuotaExceeded = true;
+  try {
+    localStorage.setItem(QUOTA_KEY, Date.now().toString());
+  } catch {}
+}
+
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): FirestoreErrorInfo {
+  const errStr = error instanceof Error ? error.message : String(error);
+  
+  if (
+    errStr.includes('resource-exhausted') ||
+    errStr.includes('Quota limit exceeded') ||
+    errStr.includes('Quota exceeded')
+  ) {
+    markQuotaExhausted();
+    console.warn('[Firestore Notice] Free daily write quota reached for today. Safely using high-capacity local IndexedDB persistence.');
+  }
+
   const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
+    error: errStr,
     authInfo: {
       userId: auth?.currentUser?.uid || null,
       email: auth?.currentUser?.email || null,
@@ -75,21 +112,8 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
     operationType,
     path,
   };
-  console.warn('Firestore Operation Notice: ', JSON.stringify(errInfo));
   return errInfo;
 }
-
-// Test initial connection
-async function testConnection() {
-  try {
-    await getDocFromServer(doc(db, 'test', 'connection'));
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.warn('Firestore running in offline/cache mode');
-    }
-  }
-}
-testConnection();
 
 // Deep sanitize helper to strip undefined and non-serializable fields
 function sanitizeForFirestore<T>(data: T): T {
@@ -112,6 +136,10 @@ function sanitizeForFirestore<T>(data: T): T {
 }
 
 export const FirebaseService = {
+  isQuotaLimited(): boolean {
+    return isQuotaExceeded;
+  },
+
   isConfigured(): boolean {
     return Boolean(firebaseConfig.projectId && firebaseConfig.apiKey);
   },
@@ -158,6 +186,7 @@ export const FirebaseService = {
   },
 
   async savePhoto(photo: PhotoItem): Promise<boolean> {
+    if (isQuotaExceeded) return false;
     const docPath = `photos/${photo.id}`;
     try {
       const sanitized = sanitizeForFirestore({
@@ -182,12 +211,14 @@ export const FirebaseService = {
 
   async saveAllPhotos(photos: PhotoItem[]): Promise<{ success: boolean; count: number; error?: string }> {
     if (!photos || photos.length === 0) return { success: true, count: 0 };
+    if (isQuotaExceeded) return { success: false, count: 0, error: 'Quota exceeded' };
     try {
       // Save all photos concurrently with individual setDoc to avoid 10MB batch payload limits
       let savedCount = 0;
       // Process in small parallel chunks of 5 for optimal network concurrency
       const chunkSize = 5;
       for (let i = 0; i < photos.length; i += chunkSize) {
+        if (isQuotaExceeded) break;
         const chunk = photos.slice(i, i + chunkSize);
         await Promise.allSettled(
           chunk.map(async (photo) => {
@@ -204,6 +235,7 @@ export const FirebaseService = {
   },
 
   async deletePhoto(id: string): Promise<boolean> {
+    if (isQuotaExceeded) return false;
     const docPath = `photos/${id}`;
     try {
       await deleteDoc(doc(db, 'photos', id));
@@ -215,6 +247,7 @@ export const FirebaseService = {
   },
 
   subscribePhotos(callback: (photos: PhotoItem[]) => void): Unsubscribe {
+    if (isQuotaExceeded) return () => {};
     const colRef = collection(db, 'photos');
     return onSnapshot(
       colRef,
@@ -250,6 +283,7 @@ export const FirebaseService = {
   },
 
   async saveSettings(settings: SiteSettings): Promise<boolean> {
+    if (isQuotaExceeded) return false;
     const docPath = 'settings/global';
     try {
       const sanitized = sanitizeForFirestore({
@@ -284,6 +318,7 @@ export const FirebaseService = {
   },
 
   async saveInquiry(inquiry: InquiryItem): Promise<boolean> {
+    if (isQuotaExceeded) return false;
     const docPath = `inquiries/${inquiry.id}`;
     try {
       const sanitized = sanitizeForFirestore(inquiry);
@@ -296,6 +331,7 @@ export const FirebaseService = {
   },
 
   async deleteInquiry(id: string): Promise<boolean> {
+    if (isQuotaExceeded) return false;
     const docPath = `inquiries/${id}`;
     try {
       await deleteDoc(doc(db, 'inquiries', id));
@@ -324,6 +360,7 @@ export const FirebaseService = {
   },
 
   async savePackages(packages: PackageItem[]): Promise<boolean> {
+    if (isQuotaExceeded) return false;
     try {
       const batch = writeBatch(db);
       for (const pkg of packages) {
@@ -334,6 +371,17 @@ export const FirebaseService = {
       return true;
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'packages');
+      return false;
+    }
+  },
+
+  async deletePackage(id: string): Promise<boolean> {
+    if (isQuotaExceeded) return false;
+    try {
+      await deleteDoc(doc(db, 'packages', id));
+      return true;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `packages/${id}`);
       return false;
     }
   },
@@ -356,6 +404,7 @@ export const FirebaseService = {
   },
 
   async saveTestimonials(items: TestimonialItem[]): Promise<boolean> {
+    if (isQuotaExceeded) return false;
     try {
       const batch = writeBatch(db);
       for (const t of items) {
@@ -366,6 +415,17 @@ export const FirebaseService = {
       return true;
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'testimonials');
+      return false;
+    }
+  },
+
+  async deleteTestimonial(id: string): Promise<boolean> {
+    if (isQuotaExceeded) return false;
+    try {
+      await deleteDoc(doc(db, 'testimonials', id));
+      return true;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `testimonials/${id}`);
       return false;
     }
   },
@@ -388,6 +448,7 @@ export const FirebaseService = {
   },
 
   async saveFaqs(items: FaqItem[]): Promise<boolean> {
+    if (isQuotaExceeded) return false;
     try {
       const batch = writeBatch(db);
       for (const f of items) {
@@ -398,6 +459,17 @@ export const FirebaseService = {
       return true;
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'faqs');
+      return false;
+    }
+  },
+
+  async deleteFaq(id: string): Promise<boolean> {
+    if (isQuotaExceeded) return false;
+    try {
+      await deleteDoc(doc(db, 'faqs', id));
+      return true;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `faqs/${id}`);
       return false;
     }
   },
@@ -420,6 +492,7 @@ export const FirebaseService = {
   },
 
   async saveFilms(items: FilmItem[]): Promise<boolean> {
+    if (isQuotaExceeded) return false;
     try {
       const batch = writeBatch(db);
       for (const film of items) {
@@ -430,6 +503,17 @@ export const FirebaseService = {
       return true;
     } catch (error) {
       handleFirestoreError(error, OperationType.WRITE, 'films');
+      return false;
+    }
+  },
+
+  async deleteFilm(id: string): Promise<boolean> {
+    if (isQuotaExceeded) return false;
+    try {
+      await deleteDoc(doc(db, 'films', id));
+      return true;
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, `films/${id}`);
       return false;
     }
   },

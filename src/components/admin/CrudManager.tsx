@@ -241,7 +241,7 @@ export const CrudManager: React.FC<CrudManagerProps> = ({
       const stats = await StorageService.compressImageWithStats(file, 1600, 0.84);
       setQuickThumbNewImage(stats.dataUrl);
     } catch (err: any) {
-      alert('Failed to process image: ' + (err.message || 'Unknown error'));
+      setActionNotice('Failed to process image: ' + (err.message || 'Unknown error'));
     } finally {
       setUploadingThumb(false);
       if (quickFileInputRef.current) quickFileInputRef.current.value = '';
@@ -323,25 +323,25 @@ export const CrudManager: React.FC<CrudManagerProps> = ({
   };
 
   // Handle Deleting
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (entityType === 'films') {
       const updated = films.filter((x) => x.id !== id);
-      StorageService.saveFilms(updated);
+      await StorageService.deleteFilm(id);
       onFilmsUpdated(updated);
       setActionNotice('Film removed successfully.');
     } else if (entityType === 'packages') {
       const updated = packages.filter((x) => x.id !== id);
-      StorageService.savePackages(updated);
+      await StorageService.deletePackage(id);
       onPackagesUpdated(updated);
       setActionNotice('Package deleted successfully.');
     } else if (entityType === 'testimonials') {
       const updated = testimonials.filter((x) => x.id !== id);
-      StorageService.saveTestimonials(updated);
+      await StorageService.deleteTestimonial(id);
       onTestimonialsUpdated(updated);
       setActionNotice('Testimonial removed successfully.');
     } else if (entityType === 'faqs') {
       const updated = faqs.filter((x) => x.id !== id);
-      StorageService.saveFaqs(updated);
+      await StorageService.deleteFaq(id);
       onFaqsUpdated(updated);
       setActionNotice('FAQ item deleted successfully.');
     }
